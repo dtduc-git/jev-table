@@ -8,12 +8,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # jevassert (pack loader) is resolved from PyPI; local dev uses the
+      # sibling checkout via [tool.uv.sources].
+      UV_NO_SOURCES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # jevassert (pack loader) is resolved from PyPI; local dev uses the
-      # sibling checkout via [tool.uv.sources].
-      - run: uv sync --all-groups --no-sources
+      - run: uv sync --all-groups
       - name: Lint
         run: uv run ruff check .
       - name: Tests
