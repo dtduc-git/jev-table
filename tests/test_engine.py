@@ -35,6 +35,16 @@ def test_prepare_rejects_empty_input(tmp_path: Path) -> None:
         _prepared(tmp_path, [])
 
 
+def test_prepare_keeps_jsonl_scalar_types(tmp_path: Path) -> None:
+    _, prepared = _prepared(
+        tmp_path,
+        [{"message": "a", "amount": 12, "flagged": True}],
+        state_fields=["message", "amount", "flagged"],
+    )
+    state = prepared.states[prepared.unique_keys[0]]
+    assert state == {"message": "a", "amount": 12, "flagged": True}
+
+
 def test_run_calls_once_per_unique_row(tmp_path: Path) -> None:
     spec, prepared = _prepared(tmp_path, [{"message": "a"}, {"message": "a"}, {"message": "b"}])
     transport = MockTransport()

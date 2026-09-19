@@ -23,9 +23,11 @@ def build_stats(
     job: JobResult,
     started_at: float,
     finished_at: float,
+    estimated_input_tokens: int = 0,
 ) -> dict[str, Any]:
     row_pairs = [(prepared_row, job.results[prepared_row.key]) for prepared_row in prepared.rows]
     error_rows = sum(1 for _, result in row_pairs if result.error is not None)
+    verified_rows = sum(1 for _, result in row_pairs if result.error is None and result.verified)
     review_rows = sum(
         1
         for _, result in row_pairs
@@ -66,6 +68,7 @@ def build_stats(
             "concurrency": job.concurrency,
             "errors": error_rows,
             "review": review_rows,
+            "verified": verified_rows,
             "automated": automated,
             "automation_rate": round(automated / len(row_pairs), 4) if row_pairs else 0.0,
         },
@@ -73,6 +76,7 @@ def build_stats(
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "usd": round(input_tokens * USD_PER_MTOK / 1_000_000, 6),
+            "estimated_input_tokens": estimated_input_tokens,
         },
         "latency_ms": {
             "p50": _percentile(latencies, 0.50),
@@ -95,17 +99,21 @@ def _question_stats(
     question = spec.questions[question_id]
     answers: list[dict[str, Any]] = []
     review_count = 0
+    verified_count = 0
     for _, result in row_pairs:
         if result.error is not None:
             continue
         answer = result.answers.get(question_id) or {}
         answers.append(answer)
-        if spec.needs_review(question_id, answer):
+        if question_id in result.verified:
+            verified_count += 1
+        elif spec.needs_review(question_id, answer):
             review_count += 1
     stats: dict[str, Any] = {
         "type": question.type,
         "answered": len(answers),
         "review": review_count,
+        "verified": verified_count,
         "error": error_rows,
     }
     if question.type == "choice":
@@ -162,9 +170,10 @@ def render_markdown(stats: dict[str, Any]) -> str:
         f"- runtime: {stats['runtime_seconds']} s · {rows['calls']} calls · "
         f"{rows['cache_hits']} from cache",
         f"- cost: {cost['input_tokens']:,} input + {cost['output_tokens']:,} output tokens "
-        f"≈ ${cost['usd']:.6f} (output free; includes cached rows)",
+        f"≈ ${cost['usd']:.6f} (output free; includes cached rows) · "
+        f"estimated {cost['estimated_input_tokens']:,} input",
         f"- rows: {rows['automated']} automated ({rows['automation_rate'] * 100:.1f}%) · "
-        f"{rows['review']} review · {rows['errors']} errors",
+        f"{rows['review']} review · {rows['verified']} verified · {rows['errors']} errors",
     ]
     if latency["p50"] is not None:
         lines.append(f"- latency: p50 {latency['p50']:.0f} ms · p95 {latency['p95']:.0f} ms")
@@ -175,6 +184,7 @@ def render_markdown(stats: dict[str, Any]) -> str:
             "|---|---|",
             f"| answered | {question['answered']} |",
             f"| review | {question['review']} |",
+            f"| verified | {question['verified']} |",
             f"| error | {question['error']} |",
         ]
         if "mean_confidence" in question:

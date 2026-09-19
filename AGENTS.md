@@ -11,7 +11,11 @@ Local-first CLI that adds Jev columns to CSVs. Part of the
   orchestration. No HTTP here.
 - `src/jev_table/transport.py` — the only module that talks to an endpoint
   (typesafe-sdk; mock it in tests).
-- `src/jev_table/output.py` — CSV columns, review flags, corrections file.
+- `src/jev_table/output.py` — CSV/JSONL input, CSV columns, review flags,
+  corrections file. `_row` is reserved (corrections identity).
+- `src/jev_table/corrections.py` — replay human corrections (edited cells or
+  ids removed from `review` = confirm-as-is; first occurrence per key wins) and
+  emit `cases.jsonl` that must satisfy `jevassert.packs.load_pack`.
 - `src/jev_table/report.py` — `stats.json` + `stats.md`.
 - `src/jev_table/cli.py` — wiring only.
 - `tests/helpers.py` — `MockTransport`, pack/CSV builders.

@@ -5,27 +5,30 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import random
 import statistics
 import sys
 import time
 from pathlib import Path
 
 from . import UsageError, __version__
+from .corrections import apply_corrections, emit_cases, read_corrections
 from .engine import (
     MAX_ROWS_WITHOUT_YES,
     USD_PER_MTOK,
     JobResult,
     Prepared,
-    estimate_call_tokens,
+    estimate_tokens_per_row,
     prepare,
     resolve_concurrency,
     run,
 )
-from .output import build_rows, output_columns, read_csv, write_corrections, write_csv
+from .output import build_rows, output_columns, read_rows, write_corrections, write_csv
 from .report import build_stats, write_stats_json, write_stats_md
 from .spec import ColumnSpec, load_column_spec
 from .transport import DEFAULT_BASE_URL, Transport, TypeSafeTransport
+
+_OVERSIZE_TOKENS = 30_000  # 32k budget for state + longest question, with headroom
+_ALIASES = ("jev-latest", "jev-preview")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,11 +44,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jev-table",
         description=(
-            "Add AI columns to a CSV: classify every row with TypeSafe's Jev, "
+            "Add AI columns to a CSV or JSONL: classify every row with TypeSafe's Jev, "
             "with confidence and a review queue."
         ),
     )
-    parser.add_argument("input", type=Path, help="CSV file to classify")
+    parser.add_argument("input", type=Path, help="CSV or JSONL file to classify")
     parser.add_argument(
         "--spec",
         required=True,
@@ -74,26 +77,35 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="estimate tokens and cost on a sample; sends nothing, no API key needed",
-    )
-    parser.add_argument(
-        "--sample",
-        type=int,
-        default=100,
-        metavar="N",
-        help="rows sampled for --dry-run (default: 100)",
+        help="estimate tokens and cost; sends nothing, no API key needed",
     )
     parser.add_argument(
         "--yes", action="store_true", help=f"allow more than {MAX_ROWS_WITHOUT_YES} rows"
     )
     parser.add_argument("--no-cache", action="store_true", help="disable the resume cache")
+    parser.add_argument(
+        "--corrections",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="replay human corrections from a *.corrections.csv file (needs the _row column)",
+    )
+    parser.add_argument(
+        "--emit-cases",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write cases.jsonl (jev-packs format v0) for rows corrected by hand",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
 
 def _execute(args: argparse.Namespace) -> int:
     spec = load_column_spec(args.spec)
-    fieldnames, rows = read_csv(args.input)
+    if args.emit_cases and not args.corrections:
+        raise UsageError("--emit-cases needs --corrections (there is nothing to emit yet)")
+    fieldnames, rows = read_rows(args.input)
     if args.limit is not None:
         if args.limit < 1:
             raise UsageError("--limit must be >= 1")
@@ -103,9 +115,10 @@ def _execute(args: argparse.Namespace) -> int:
     endpoint = (
         args.base_url or os.environ.get("TYPESAFE_BASE_URL") or DEFAULT_BASE_URL
     ).rstrip("/")
+    estimates = estimate_tokens_per_row(prepared, spec)
 
     if args.dry_run:
-        _print_dry_run(args, spec, prepared, endpoint)
+        _print_dry_run(args, spec, prepared, estimates, endpoint)
         return 0
 
     if len(rows) > MAX_ROWS_WITHOUT_YES and not args.yes:
@@ -123,17 +136,28 @@ def _execute(args: argparse.Namespace) -> int:
     stats_path = out_path.with_suffix(".stats.json")
     stats_md_path = out_path.with_suffix(".stats.md")
     corrections_path = out_path.with_suffix(".corrections.csv")
+    cases_path = args.emit_cases
     cache_path = None if args.no_cache else out_path.with_suffix(".cache.jsonl")
 
-    _print_banner(args, spec, prepared, endpoint, out_path, cache_path)
+    _print_banner(args, spec, prepared, estimates, endpoint, out_path, cache_path)
     started_at = time.monotonic()
     transport = _make_transport(args)
     job = asyncio.run(_run(prepared, spec, transport, args, cache_path))
     finished_at = time.monotonic()
 
+    if args.corrections is not None:
+        corrected_cells = apply_corrections(
+            read_corrections(args.corrections),
+            prepared=prepared,
+            job=job,
+            spec=spec,
+            cache_path=cache_path,
+        )
+        print(f"  applied {corrected_cells} correction(s) from {args.corrections}")
+
     output_rows = build_rows(fieldnames, rows, prepared, job, spec)
     write_csv(out_path, columns, output_rows)
-    corrections_count = write_corrections(corrections_path, fieldnames, output_rows, spec)
+    review_count = write_corrections(corrections_path, fieldnames, prepared, output_rows, spec)
     stats = build_stats(
         input_path=args.input,
         out_path=out_path,
@@ -144,10 +168,23 @@ def _execute(args: argparse.Namespace) -> int:
         job=job,
         started_at=started_at,
         finished_at=finished_at,
+        estimated_input_tokens=sum(estimates),
     )
     write_stats_json(stats_path, stats)
     write_stats_md(stats_md_path, stats)
-    _print_summary(stats, out_path, corrections_path, corrections_count, stats_path, stats_md_path)
+    emitted = 0
+    if cases_path is not None:
+        emitted = emit_cases(cases_path, prepared=prepared, job=job, spec=spec)
+    _print_summary(
+        stats,
+        out_path,
+        corrections_path,
+        review_count,
+        stats_path,
+        stats_md_path,
+        cases_path,
+        emitted,
+    )
     return 1 if stats["rows"]["errors"] else 0
 
 
@@ -177,44 +214,40 @@ def _make_transport(args: argparse.Namespace) -> Transport:
 
 
 def _print_dry_run(
-    args: argparse.Namespace, spec: ColumnSpec, prepared: Prepared, endpoint: str
+    args: argparse.Namespace,
+    spec: ColumnSpec,
+    prepared: Prepared,
+    estimates: list[int],
+    endpoint: str,
 ) -> None:
-    if args.sample < 1:
-        raise UsageError("--sample must be >= 1")
-    unique_keys = prepared.unique_keys
-    sampled = (
-        unique_keys
-        if len(unique_keys) <= args.sample
-        else random.Random(0).sample(unique_keys, args.sample)
-    )
-    api_questions = spec.api_questions()
-    per_call = int(
-        statistics.median(
-            estimate_call_tokens(prepared.states[key], api_questions) for key in sampled
-        )
-    )
-    estimated_tokens = per_call * len(unique_keys)
-    estimated_usd = estimated_tokens * USD_PER_MTOK / 1_000_000
+    total = sum(estimates)
+    per_row = int(statistics.median(estimates)) if estimates else 0
+    estimated_usd = total * USD_PER_MTOK / 1_000_000
     print("dry run — nothing was sent")
     print(
         f"  spec: {spec.id} v{spec.version} "
         f"({len(spec.questions)} questions: {', '.join(spec.questions)})"
     )
     print(f"  model: {args.model} · endpoint: {endpoint}")
-    print(f"  rows: {len(prepared.rows)} · unique: {len(unique_keys)} · sampled: {len(sampled)}")
-    print(f"  estimated {per_call:,} input tokens per unique row (state + questions)")
+    print(f"  rows: {len(prepared.rows)} · unique: {len(prepared.unique_keys)}")
+    print(f"  estimated {per_row:,} input tokens per unique row (state + questions)")
     print(
-        f"  estimated total: {estimated_tokens:,} input tokens ≈ ${estimated_usd:.6f} "
+        f"  estimated total: {total:,} input tokens ≈ ${estimated_usd:.6f} "
         "(input $0.042/Mtok; output free)"
     )
-    if per_call > 30_000:
-        print("  warning: states approach Jev's 32k-token budget for state + longest question")
+    oversize = sum(1 for tokens in estimates if tokens > _OVERSIZE_TOKENS)
+    if oversize:
+        print(
+            f"  warning: {oversize} row(s) near Jev's 32k-token budget for "
+            "state + longest question; split or shorten them"
+        )
 
 
 def _print_banner(
     args: argparse.Namespace,
     spec: ColumnSpec,
     prepared: Prepared,
+    estimates: list[int],
     endpoint: str,
     out_path: Path,
     cache_path: Path | None,
@@ -236,6 +269,9 @@ def _print_banner(
             f"  note: no thresholds for {', '.join(ungated)} — "
             "those answers always route to review"
         )
+    oversize = sum(1 for tokens in estimates if tokens > _OVERSIZE_TOKENS)
+    if oversize:
+        print(f"  warning: {oversize} row(s) may exceed Jev's 32k-token budget")
     print(f"  out: {out_path} · cache: {'off' if cache_path is None else cache_path}")
 
 
@@ -257,9 +293,11 @@ def _print_summary(
     stats: dict,
     out_path: Path,
     corrections_path: Path,
-    corrections_count: int,
+    review_count: int,
     stats_path: Path,
     stats_md_path: Path,
+    cases_path: Path | None,
+    emitted: int,
 ) -> None:
     rows = stats["rows"]
     cost = stats["cost"]
@@ -270,17 +308,30 @@ def _print_summary(
     )
     print(
         f"  automation: {rows['automation_rate'] * 100:.1f}% "
-        f"({rows['automated']}/{rows['total']} rows) · review: {rows['review']}"
+        f"({rows['automated']}/{rows['total']} rows) · review: {rows['review']} · "
+        f"verified: {rows['verified']}"
     )
+    estimated = cost["estimated_input_tokens"]
+    delta = ""
+    if estimated:
+        delta = f" (estimated {estimated:,}, {cost['input_tokens'] / estimated:+.2f}x)"
     print(
         f"  tokens: {cost['input_tokens']:,} in + {cost['output_tokens']:,} out "
-        f"≈ ${cost['usd']:.6f}"
+        f"≈ ${cost['usd']:.6f}{delta}"
     )
     if latency["p50"] is not None:
         print(f"  latency: p50 {latency['p50']:.0f} ms · p95 {latency['p95']:.0f} ms")
+    reported = stats["model"]["reported"]
+    requested = stats["model"]["requested"]
+    if reported and requested not in _ALIASES:
+        unexpected = [model for model in reported if model != requested]
+        if unexpected:
+            print(f"  warning: pinned model {requested} was answered by {', '.join(unexpected)}")
     print(f"  wrote {out_path}")
-    if corrections_count:
-        print(f"  wrote {corrections_path} ({corrections_count} rows need review)")
+    if review_count:
+        print(f"  wrote {corrections_path} ({review_count} rows need review)")
+    if cases_path is not None:
+        print(f"  wrote {cases_path} ({emitted} golden cases)")
     print(f"  wrote {stats_path} and {stats_md_path}")
 
 

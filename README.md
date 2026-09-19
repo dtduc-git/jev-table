@@ -65,12 +65,11 @@ are parsed by the same canonical loader the rest of the suite uses
 A label auto-accepts only when its probability clears its floor in
 `thresholds`. Everything else — low probability, a label with no floor (like
 `unknown`), or a question with no thresholds at all — lands in the `review`
-column. You fix those rows, and the corrections file becomes the seed for a
-golden set:
+column:
 
 ```
 data.jev.csv               # your rows + answers + confidence + review + error
-data.jev.corrections.csv   # only the rows that need a human
+data.jev.corrections.csv   # one row per flagged state (needs a human)
 data.jev.stats.json/.md    # cost, latency, automation rate, distributions
 data.jev.cache.jsonl       # resume cache (delete to force a full re-run)
 ```
@@ -79,10 +78,25 @@ data.jev.cache.jsonl       # resume cache (delete to force a full re-run)
 in any spreadsheet. `category_confidence` and `urgency_confidence` carry the
 model's confidence for choice/score answers.
 
+Fix a row by editing its answer cell, or delete the id from `review` to confirm
+it as-is, then replay — corrected rows make no API calls and their flags clear:
+
+```sh
+jev-table messages.csv --spec pack.yaml \
+  --corrections messages.jev.corrections.csv \
+  --emit-cases messages.jev.cases.jsonl
+```
+
+`--emit-cases` writes the corrected rows as a `cases.jsonl` in jev-packs
+format v0: a golden set you can hand to `jevassert record` for evidence. That
+is the suite flywheel — jev-table labels, you review, jevassert measures,
+jev-packs publishes.
+
 ## How it works
 
 - **Dedupe** — identical rows (same state, questions and model) are sent once
-  and fanned back out. Duplicates are free.
+  and fanned back out. Duplicates are free, and corrections list one row per
+  unique state.
 - **All questions, one call per row** — Jev evaluates every question in
   parallel against one state; batching is [an order of magnitude cheaper and
   faster](https://docs.typesafe.ai/cookbooks/parallel_questions) than one call
@@ -91,8 +105,9 @@ model's confidence for choice/score answers.
   calls what's missing. Errors are never cached and are retried next run.
 - **Concurrency** — 8 in-flight requests by default, auto-capped when states
   are large so you stay under the token-rate limit. `--concurrency` overrides.
-- **Cost preview** — `--dry-run` samples rows, estimates tokens (chars/4) and
-  prints expected dollars at $0.042/Mtok input (output is free).
+- **Cost preview** — `--dry-run` estimates tokens (chars/4) across the whole
+  input and prints expected dollars at $0.042/Mtok input (output is free);
+  every real run also reports actual vs estimated tokens.
 - **Safety cap** — files over 10,000 rows need `--yes` after a dry run.
 
 Retries and 429/529 backoff come from the official TypeSafe SDK.
@@ -110,9 +125,12 @@ not used for training.
 
 ```
 jev-table INPUT --spec SPEC [--out PATH] [--model NAME] [--base-url URL]
-           [--limit N] [--concurrency N] [--dry-run] [--sample N]
-           [--yes] [--no-cache]
+           [--limit N] [--concurrency N] [--dry-run]
+           [--corrections PATH] [--emit-cases PATH] [--yes] [--no-cache]
 ```
+
+`INPUT` is a CSV or a flat JSONL (scalar values only; JSONL keeps numbers and
+booleans as-is in the state sent to Jev).
 
 | flag | meaning |
 |---|---|
@@ -121,8 +139,9 @@ jev-table INPUT --spec SPEC [--out PATH] [--model NAME] [--base-url URL]
 | `--model` | Jev model or alias (default `jev-latest`; pin a version to freeze behavior) |
 | `--base-url` | Jev-compatible endpoint (local replicas welcome) |
 | `--limit N` | process the first N rows |
-| `--dry-run` | estimate tokens/cost on a sample; sends nothing, needs no key |
-| `--sample N` | rows sampled by `--dry-run` (default 100) |
+| `--dry-run` | estimate tokens/cost; sends nothing, needs no key |
+| `--corrections PATH` | replay human edits from a `*.corrections.csv` (needs `_row`) |
+| `--emit-cases PATH` | write corrected rows as `cases.jsonl` (jev-packs format v0) |
 | `--yes` | allow more than 10,000 rows |
 | `--no-cache` | disable the resume cache |
 
@@ -157,11 +176,12 @@ uv run jev-table examples/sms-triage/sample.csv --spec examples/sms-triage/pack.
 via `[tool.uv.sources]`; CI resolves it from PyPI (`uv sync --no-sources`), so
 `jevassert` must be published before CI can run.
 
-Live smoke against the public UCI SMS Spam dataset:
+Live smoke against the public UCI SMS Spam dataset (which ships gold labels):
 
 ```sh
 python scripts/fetch_sms_spam.py sms-spam-sample.csv 200
 TYPESAFE_API_KEY=... uv run jev-table sms-spam-sample.csv --spec examples/sms-triage/pack.yaml
+uv run python scripts/report_accuracy.py sms-spam-sample.jev.csv --question category
 ```
 
 Releases: push a `v*` tag; GitHub Actions builds and publishes to PyPI via

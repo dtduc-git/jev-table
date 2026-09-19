@@ -26,14 +26,14 @@ _CONCURRENCY_SAMPLE = 100
 @dataclass(frozen=True)
 class PreparedRow:
     index: int
-    state: dict[str, str]
+    state: dict[str, Any]
     key: str
 
 
 @dataclass
 class Prepared:
     rows: list[PreparedRow]
-    states: dict[str, dict[str, str]]  # key -> state
+    states: dict[str, dict[str, Any]]  # key -> state
     unique_keys: list[str]  # first-seen order
 
 
@@ -46,6 +46,7 @@ class RowResult:
     latency_ms: float | None = None
     error: str | None = None
     from_cache: bool = False
+    verified: list[str] = field(default_factory=list)  # question ids a human confirmed
 
 
 @dataclass
@@ -56,22 +57,26 @@ class JobResult:
     concurrency: int
 
 
-def prepare(rows: list[dict[str, str]], spec: ColumnSpec, model: str) -> Prepared:
-    """Map CSV rows to states and deduplicate identical (state, questions, model) rows."""
+def prepare(rows: list[dict[str, Any]], spec: ColumnSpec, model: str) -> Prepared:
+    """Map input rows to states and deduplicate identical (state, questions, model) rows."""
     if not rows:
         raise UsageError("input has no data rows")
-    missing = [name for name in spec.state_fields if name not in rows[0]]
+    present = set().union(*(row.keys() for row in rows))
+    missing = [name for name in spec.state_fields if name not in present]
     if missing:
         raise UsageError(
-            f"CSV is missing state field(s) from the spec: {', '.join(missing)} "
-            f"(found: {', '.join(rows[0])})"
+            f"input is missing state field(s) from the spec: {', '.join(missing)} "
+            f"(found: {', '.join(sorted(present))})"
         )
     api_questions = spec.api_questions()
     prepared_rows: list[PreparedRow] = []
-    states: dict[str, dict[str, str]] = {}
+    states: dict[str, dict[str, Any]] = {}
     unique_keys: list[str] = []
     for index, row in enumerate(rows):
-        state = {name: row.get(name) or "" for name in spec.state_fields}
+        state = {
+            name: (row[name] if name in row and row[name] is not None else "")
+            for name in spec.state_fields
+        }
         key = row_key(state, api_questions, model, spec)
         if key not in states:
             states[key] = state
@@ -81,7 +86,7 @@ def prepare(rows: list[dict[str, str]], spec: ColumnSpec, model: str) -> Prepare
 
 
 def row_key(
-    state: dict[str, str], api_questions: dict[str, dict[str, Any]], model: str, spec: ColumnSpec
+    state: dict[str, Any], api_questions: dict[str, dict[str, Any]], model: str, spec: ColumnSpec
 ) -> str:
     material = json.dumps(
         {
@@ -101,10 +106,13 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def estimate_call_tokens(state: dict[str, str], api_questions: dict[str, dict[str, Any]]) -> int:
-    return estimate_tokens(json.dumps(state, ensure_ascii=False)) + estimate_tokens(
-        json.dumps(api_questions, ensure_ascii=False)
-    )
+def estimate_tokens_per_row(prepared: Prepared, spec: ColumnSpec) -> list[int]:
+    """Estimated input tokens per unique row (state + questions), same key order."""
+    questions_tokens = estimate_tokens(json.dumps(spec.api_questions(), ensure_ascii=False))
+    return [
+        questions_tokens + estimate_tokens(json.dumps(prepared.states[key], ensure_ascii=False))
+        for key in prepared.unique_keys
+    ]
 
 
 def resolve_concurrency(prepared: Prepared, spec: ColumnSpec, requested: int | None) -> int:
@@ -113,9 +121,7 @@ def resolve_concurrency(prepared: Prepared, spec: ColumnSpec, requested: int | N
         if requested < 1:
             raise UsageError("--concurrency must be >= 1")
         return requested
-    api_questions = spec.api_questions()
-    sample = prepared.unique_keys[:_CONCURRENCY_SAMPLE]
-    estimates = [estimate_call_tokens(prepared.states[key], api_questions) for key in sample]
+    estimates = estimate_tokens_per_row(prepared, spec)[:_CONCURRENCY_SAMPLE]
     per_call = statistics.median(estimates) if estimates else 1
     cap = max(1, int(_SOFT_TOKEN_BUDGET_PER_SECOND // max(per_call, 1)))
     return max(1, min(DEFAULT_CONCURRENCY, cap))
@@ -143,6 +149,7 @@ def load_cache(path: Path) -> dict[str, RowResult]:
             usage=raw.get("usage") or {},
             latency_ms=raw.get("latency_ms"),
             from_cache=True,
+            verified=list(raw.get("verified") or []),
         )
     return cached
 
@@ -156,6 +163,7 @@ def append_cache(path: Path, result: RowResult) -> None:
             "latency_ms": result.latency_ms,
             "usage": result.usage,
             "answers": result.answers,
+            "verified": result.verified,
         },
         ensure_ascii=False,
         sort_keys=True,
