@@ -27,15 +27,14 @@ DEFAULT_QUESTIONS: dict[str, Any] = {
 
 
 def write_spec(
-    directory: Path,
+    parent: Path,
     *,
     questions: dict[str, Any] | None = None,
     thresholds: dict[str, Any] | None = None,
     state_fields: list[str] | None = None,
     **overrides: Any,
 ) -> Path:
-    spec_dir = Path(directory)
-    spec_dir.mkdir(parents=True, exist_ok=True)
+    """Write a spec-compliant pack under ``parent/<id>`` (id must match the dir)."""
     meta: dict[str, Any] = {
         "spec": 0,
         "id": overrides.pop("id", "test-spec"),
@@ -43,9 +42,11 @@ def write_spec(
         "license": "CC0-1.0",
         "tested": None,
         "description": "Test spec.",
-        "state": {"fields": state_fields or ["message"]},
+        "state": {"description": "Test state.", "fields": state_fields or ["message"]},
         "questions": questions if questions is not None else DEFAULT_QUESTIONS,
     }
+    spec_dir = Path(parent) / meta["id"]
+    spec_dir.mkdir(parents=True, exist_ok=True)
     if thresholds is not None:
         meta["thresholds"] = thresholds
     meta.update(overrides)

@@ -56,7 +56,9 @@ thresholds:
   mentions_money: {true: 0.85, false: 0.85}
 ```
 
-See [`examples/sms-triage/`](examples/sms-triage/) for a runnable pair.
+See [`examples/sms-triage/`](examples/sms-triage/) for a runnable pair. Specs
+are parsed by the same canonical loader the rest of the suite uses
+(`jevassert.packs`); golden cases are optional for table specs.
 
 ## Review is the point
 
@@ -149,6 +151,11 @@ uv run ruff check .
 uv run pytest
 uv run jev-table examples/sms-triage/sample.csv --spec examples/sms-triage/pack.yaml --dry-run
 ```
+
+`jev-table` imports the pack loader from [`jevassert`](https://github.com/dtduc-git/jevassert)
+(`jevassert.packs`). Locally, `uv sync` resolves it from the sibling checkout
+via `[tool.uv.sources]`; CI resolves it from PyPI (`uv sync --no-sources`), so
+`jevassert` must be published before CI can run.
 
 Live smoke against the public UCI SMS Spam dataset:
 

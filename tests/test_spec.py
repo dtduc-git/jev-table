@@ -40,7 +40,7 @@ def test_rejects_wrong_spec_version(tmp_path: Path) -> None:
 
 
 def test_rejects_unknown_top_level_key(tmp_path: Path) -> None:
-    with pytest.raises(UsageError, match="unknown key\\(s\\): gats"):
+    with pytest.raises(UsageError, match="unexpected key `gats`"):
         _load(tmp_path, gats={})
 
 
@@ -52,18 +52,18 @@ def test_rejects_choice_without_unknown(tmp_path: Path) -> None:
             "options": {"billing": "money", "technical": "bugs"},
         }
     }
-    with pytest.raises(UsageError, match="must contain the label 'unknown'"):
+    with pytest.raises(UsageError, match="must include `unknown`"):
         _load(tmp_path, questions=questions)
 
 
 def test_rejects_single_option_choice(tmp_path: Path) -> None:
     questions = {"queue": {"type": "choice", "instructions": "?", "options": {"unknown": "?"}}}
-    with pytest.raises(UsageError, match="at least 2 labels"):
+    with pytest.raises(UsageError, match="at least 2 options"):
         _load(tmp_path, questions=questions)
 
 
 def test_rejects_threshold_for_unknown_question(tmp_path: Path) -> None:
-    with pytest.raises(UsageError, match="not a question id"):
+    with pytest.raises(UsageError, match="unknown question"):
         _load(tmp_path, thresholds={"nope": {"x": 0.5}})
 
 
@@ -82,20 +82,43 @@ def test_rejects_missing_state_fields(tmp_path: Path) -> None:
     raw = yaml.safe_load((spec_dir / "pack.yaml").read_text())
     del raw["state"]["fields"]
     (spec_dir / "pack.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
-    with pytest.raises(UsageError, match="state.fields"):
+    with pytest.raises(UsageError, match="required key `fields`"):
         load_column_spec(spec_dir)
 
 
+def test_level_descriptions_flow_to_api(tmp_path: Path) -> None:
+    questions = {
+        "severity": {
+            "type": "score",
+            "instructions": "How severe?",
+            "levels": ["low", "high", "unknown"],
+            "level_descriptions": {
+                "low": "No user impact.",
+                "high": "Service is down for everyone.",
+                "unknown": "Cannot tell from the message.",
+            },
+        }
+    }
+    spec = _load(tmp_path, questions=questions)
+    assert spec.questions["severity"].labels == ("low", "high", "unknown")
+    assert spec.api_questions()["severity"]["criteria"] == [
+        "No user impact.",
+        "Service is down for everyone.",
+        "Cannot tell from the message.",
+    ]
+
+
 def test_yaml_bool_keys_normalize_to_labels(tmp_path: Path) -> None:
-    spec_dir = tmp_path / "spec"
+    spec_dir = tmp_path / "bool-keys"
     spec_dir.mkdir()
     (spec_dir / "pack.yaml").write_text(
         "spec: 0\n"
         "id: bool-keys\n"
         "version: 0.1.0\n"
         "license: CC0-1.0\n"
+        "tested: null\n"
         "description: test\n"
-        "state: {fields: [message]}\n"
+        "state: {description: one message, fields: [message]}\n"
         "questions:\n"
         "  ok:\n"
         "    type: noul\n"

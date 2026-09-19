@@ -11,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-groups
+      # jevassert (pack loader) is resolved from PyPI; local dev uses the
+      # sibling checkout via [tool.uv.sources].
+      - run: uv sync --all-groups --no-sources
       - name: Lint
         run: uv run ruff check .
       - name: Tests

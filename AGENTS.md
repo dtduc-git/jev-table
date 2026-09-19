@@ -34,8 +34,9 @@ uv run jev-table examples/sms-triage/sample.csv --spec examples/sms-triage/pack.
   its floor; no floor (or no thresholds) means review.
 - Output columns are a stable interface: input columns + one per question
   (+ `_confidence` for choice/score) + `review` + `error`.
-- The spec loader is a temporary standalone implementation; delegate to
-  `jevassert.packs` once that loader implements `SPEC.md`.
+- Spec parsing/validation is delegated to `jevassert.packs`
+  (`load_pack(..., require_cases=False)` — table specs are unlabeled). Do not
+  add a second parser here.
 
 ## Release
 
