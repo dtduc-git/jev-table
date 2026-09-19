@@ -1,0 +1,32 @@
+# Column spec (jev-packs format spec v0) for examples/sms-triage/sample.csv
+spec: 0
+id: sms-triage
+version: 0.1.0
+license: CC0-1.0
+tested: null
+description: >-
+  Demo column spec: label short SMS-style messages as spam or ham and score how
+  soon a human should look. Non-goals: replying, language detection, entity
+  extraction.
+state:
+  description: One short message per row.
+  fields: [message]
+questions:
+  category:
+    type: choice
+    instructions: "Is `message` unsolicited commercial spam, or a message the recipient plausibly expects?"
+    options:
+      spam: "Unsolicited bulk or promotional message the recipient did not ask for."
+      ham: "Personal, transactional or service message the recipient plausibly expects."
+      unknown: "Cannot tell from the message alone."
+  urgency:
+    type: score
+    instructions: "How soon does `message` need a human look, considering money, deadlines and safety?"
+    levels: [low, normal, high, unknown]
+  mentions_money:
+    type: noul
+    instructions: "Does `message` mention an amount of money, a payment, or an account balance?"
+thresholds:
+  category: {spam: 0.8, ham: 0.8}
+  urgency: {low: 0.7, normal: 0.7, high: 0.7}
+  mentions_money: {true: 0.85, false: 0.85}

@@ -1,0 +1,70 @@
+[project]
+name = "jev-table"
+dynamic = ["version"]
+description = "AI columns for CSV files: classify every row with TypeSafe's Jev, with confidence, a review queue and a cost preview. Local-first, resumable, BYO key."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Duke - Duc Dinh", email = "dtduc.contact@gmail.com" }]
+keywords = [
+  "typesafe",
+  "jev",
+  "csv",
+  "classification",
+  "llm",
+  "confidence",
+  "data-cleaning",
+  "etl",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "pyyaml>=6.0",
+  "typesafe-sdk>=0.7.0,<0.8.0",
+]
+
+[project.scripts]
+jev-table = "jev_table.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dtduc-git/jev-table"
+Issues = "https://github.com/dtduc-git/jev-table/issues"
+Changelog = "https://github.com/dtduc-git/jev-table/releases"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/jev_table/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jev_table"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
