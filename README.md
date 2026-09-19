@@ -105,12 +105,36 @@ jev-packs publishes.
   calls what's missing. Errors are never cached and are retried next run.
 - **Concurrency** — 8 in-flight requests by default, auto-capped when states
   are large so you stay under the token-rate limit. `--concurrency` overrides.
-- **Cost preview** — `--dry-run` estimates tokens (chars/4) across the whole
-  input and prints expected dollars at $0.042/Mtok input (output is free);
-  every real run also reports actual vs estimated tokens.
+- **Cost preview** — `--dry-run` estimates tokens across the whole input
+  (~3 chars/token plus per-request framing, calibrated on the live smoke below)
+  and prints expected dollars at $0.042/Mtok input (output is free); every real
+  run reports actual vs estimated tokens (within ~5% on the smoke).
 - **Safety cap** — files over 10,000 rows need `--yes` after a dry run.
 
 Retries and 429/529 backoff come from the official TypeSafe SDK.
+
+## Live smoke (2026-09-19)
+
+200 random rows from the [UCI SMS Spam Collection](https://archive.ics.uci.edu/dataset/228/sms+spam+collection)
+(CC BY 4.0, Almeida et al. 2011), spec [`examples/sms-triage/pack.yaml`](examples/sms-triage/pack.yaml),
+`jev-1.13.0`:
+
+- **97.4% accuracy** on the 194 comparable rows (6 `unknown` excluded) —
+  and the 93 auto-accepted rows were **100% correct**: every one of the 5
+  errors landed in the review queue.
+- 46.5% automated (93/200 rows) with the spec's conservative floors; 107 rows
+  reviewed, 0 errors. Lower the floors if you want more automation.
+- $0.0040 for 200 rows (~477 input tokens/row), 8.9 s wall, per-call latency
+  p50 4.7 s / p95 8.4 s. Dry-run estimated 91,871 tokens vs 95,313 actual
+  (1.04x) — and a rerun costs $0 from the resume cache.
+
+Reproduce:
+
+```sh
+python scripts/fetch_sms_spam.py sms-spam-sample.csv 200
+TYPESAFE_API_KEY=... jev-table sms-spam-sample.csv --spec examples/sms-triage/pack.yaml
+python scripts/report_accuracy.py sms-spam-sample.jev.csv --question category
+```
 
 ## Privacy
 

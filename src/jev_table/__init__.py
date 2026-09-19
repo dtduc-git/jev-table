@@ -1,6 +1,6 @@
 """jev-table — AI columns for CSV files with TypeSafe's Jev."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 class UsageError(Exception):

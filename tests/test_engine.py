@@ -114,7 +114,13 @@ def test_resolve_concurrency_default_and_override(tmp_path: Path) -> None:
 
 def test_resolve_concurrency_caps_large_states(tmp_path: Path) -> None:
     spec, prepared = _prepared(tmp_path, [{"message": "x" * 150_000}])
-    assert resolve_concurrency(prepared, spec, None) == 5
+    assert resolve_concurrency(prepared, spec, None) == 3
+
+
+def test_estimate_tokens_is_empirically_calibrated() -> None:
+    from jev_table.engine import estimate_tokens
+
+    assert estimate_tokens("x" * 300) == 100
 
 
 def test_load_cache_tolerates_torn_line(tmp_path: Path) -> None:

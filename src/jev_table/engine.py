@@ -21,6 +21,7 @@ USD_PER_MTOK = 0.042  # input tokens; output tokens are free
 DEFAULT_CONCURRENCY = 8
 _SOFT_TOKEN_BUDGET_PER_SECOND = 200_000  # documented ceiling is 250k tokens/s
 _CONCURRENCY_SAMPLE = 100
+_REQUEST_OVERHEAD_TOKENS = 200  # fixed per-request framing, calibrated on the same smoke
 
 
 @dataclass(frozen=True)
@@ -102,13 +103,16 @@ def row_key(
 
 
 def estimate_tokens(text: str) -> int:
-    # ponytail: chars/4 heuristic; Jev's tokenizer is not public
-    return max(1, len(text) // 4)
+    # ponytail: ~3 chars/token, calibrated on the 2026-09-19 SMS smoke; the
+    # tokenizer is not public, so every run reports actual vs estimated tokens
+    return max(1, len(text) // 3)
 
 
 def estimate_tokens_per_row(prepared: Prepared, spec: ColumnSpec) -> list[int]:
     """Estimated input tokens per unique row (state + questions), same key order."""
-    questions_tokens = estimate_tokens(json.dumps(spec.api_questions(), ensure_ascii=False))
+    questions_tokens = _REQUEST_OVERHEAD_TOKENS + estimate_tokens(
+        json.dumps(spec.api_questions(), ensure_ascii=False)
+    )
     return [
         questions_tokens + estimate_tokens(json.dumps(prepared.states[key], ensure_ascii=False))
         for key in prepared.unique_keys
