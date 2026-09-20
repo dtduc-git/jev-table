@@ -20,6 +20,28 @@ uvx jev-table messages.csv --spec pack.yaml               # writes messages.jev.
 | Your appointment is confirmed… | ham | normal | 0.02 | |
 | [weird message] | | | | category;urgency |
 
+![jev-table demo: dry run, live run, labeled CSV](docs/demo.gif)
+
+_10 real rows, live endpoint — dry run first, then the same command for real:
+automation split, cost, latency, review queue. Regenerate with
+`docs/demo.sh` (asciinema + agg)._
+
+## Point it at a local backend
+
+`--base-url` swaps the endpoint for anything Jev-compatible — a local replica,
+a gateway, or a proxy in front of the hosted API. The API key still comes from
+`TYPESAFE_API_KEY`:
+
+```sh
+uvx jev-table messages.csv --spec pack.yaml --base-url http://localhost:8000
+# pin a model when the backend serves more than one
+uvx jev-table messages.csv --spec pack.yaml --base-url http://localhost:8000 --model jev-latest
+```
+
+Specs with `tested: null` resolve to `jev-latest`; against a self-hosted
+backend, pin the model explicitly so the numbers you record match the model
+you run.
+
 ## The column spec is a pack
 
 Columns come from a [jev-packs](https://github.com/dtduc-git/jev-packs) pack
